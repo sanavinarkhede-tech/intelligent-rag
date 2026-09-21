@@ -1,5 +1,6 @@
-import streamlit as st
+```python
 import os
+import streamlit as st
 
 from langchain_community.document_loaders import PyPDFDirectoryLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -10,45 +11,63 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 
-# --------------------------------------------------
-# PAGE CONFIG
-# --------------------------------------------------
+# ============================================================
+# STREAMLIT PAGE CONFIGURATION
+# ============================================================
 
 st.set_page_config(
     page_title="Zyro Dynamics HR Assistant",
-    page_icon="🤖"
+    page_icon="🤖",
+    layout="wide"
 )
 
 st.title("🤖 Zyro Dynamics HR Assistant")
-st.write("Ask questions about Zyro Dynamics HR policies.")
+st.caption("Ask questions related to Zyro Dynamics HR policies and employee information.")
 
 
-# --------------------------------------------------
-# API KEY
-# --------------------------------------------------
+# ============================================================
+# GROQ API KEY
+# ============================================================
 
 if "GROQ_API_KEY" not in st.secrets:
     st.error("GROQ_API_KEY is not configured in Streamlit Secrets.")
     st.stop()
 
-os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"].strip()
 
+if not GROQ_API_KEY:
+    st.error("GROQ_API_KEY is empty.")
+    st.stop()
 
-# --------------------------------------------------
-# CORPUS PATH
-# --------------------------------------------------
-
-CORPUS_PATH = "./zyro-dynamics-hr-corpus"
-
-
-if not os.path.exists(CORPUS_PATH):
-    st.error(f"HR corpus folder not found: {CORPUS_PATH}")
+if not GROQ_API_KEY.startswith("gsk_"):
+    st.error("The Groq API key format looks incorrect.")
     st.stop()
 
 
-# --------------------------------------------------
-# LOAD DOCUMENTS
-# --------------------------------------------------
+# ============================================================
+# LLM CONFIGURATION
+# ============================================================
+
+LLM_PROVIDER = "groq"
+LLM_MODEL = "openai/gpt-oss-20b"
+
+
+# ============================================================
+# LOAD HR DOCUMENTS
+# ============================================================
+
+CORPUS_PATH = "./zyro-dynamics-hr-corpus"
+
+if not os.path.exists(CORPUS_PATH):
+    st.error(
+        f"HR corpus folder not found: {CORPUS_PATH}"
+    )
+    st.info(
+        "Make sure the folder 'zyro-dynamics-hr-corpus' "
+        "is uploaded to the GitHub repository."
+    )
+    st.stop()
+
 
 @st.cache_resource
 def load_documents():
@@ -64,12 +83,14 @@ with st.spinner("Loading HR documents..."):
     documents = load_documents()
 
 
-st.success(f"Loaded {len(documents)} HR documents")
+if len(documents) == 0:
+    st.error("No PDF documents were found in the HR corpus.")
+    st.stop()
 
 
-# --------------------------------------------------
-# SPLIT DOCUMENTS
-# --------------------------------------------------
+# ============================================================
+# TEXT SPLITTING
+# ============================================================
 
 @st.cache_resource
 def create_chunks(_documents):
@@ -84,83 +105,85 @@ def create_chunks(_documents):
     return chunks
 
 
-with st.spinner("Creating document chunks..."):
+with st.spinner("Preparing documents..."):
     chunks = create_chunks(documents)
 
 
-st.write(f"Created {len(chunks)} document chunks")
-
-
-# --------------------------------------------------
+# ============================================================
 # EMBEDDINGS
-# --------------------------------------------------
+# ============================================================
 
 @st.cache_resource
 def create_embeddings():
 
-    embeddings = HuggingFaceEmbeddings(
+    embeddings_model = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
-    return embeddings
+    return embeddings_model
 
 
 with st.spinner("Loading embedding model..."):
     embeddings_model = create_embeddings()
 
 
-# --------------------------------------------------
-# VECTOR DATABASE
-# --------------------------------------------------
+# ============================================================
+# FAISS VECTOR DATABASE
+# ============================================================
 
 @st.cache_resource
-def create_vectorstore(_chunks, _embeddings):
+def create_vectorstore(_chunks, _embeddings_model):
 
     vectorstore = FAISS.from_documents(
         _chunks,
-        _embeddings
+        _embeddings_model
     )
 
     return vectorstore
 
 
-with st.spinner("Creating FAISS vector database..."):
+with st.spinner("Creating vector database..."):
     vectorstore = create_vectorstore(
         chunks,
         embeddings_model
     )
 
 
+# ============================================================
+# RETRIEVER
+# ============================================================
+
 retriever = vectorstore.as_retriever(
     search_kwargs={"k": 3}
 )
 
 
-# --------------------------------------------------
+# ============================================================
 # GROQ LLM
-# --------------------------------------------------
+# ============================================================
 
 @st.cache_resource
-def create_llm():
+def create_llm(api_key):
 
-    llm = ChatGroq(
-        model="openai/gpt-oss-20b",
+    llm_model = ChatGroq(
+        model=LLM_MODEL,
         temperature=0.7,
-        max_tokens=500
+        max_tokens=500,
+        api_key=api_key
     )
 
-    return llm
+    return llm_model
 
 
-llm_model = create_llm()
+llm_model = create_llm(GROQ_API_KEY)
 
 
-# --------------------------------------------------
+# ============================================================
 # RAG PROMPT
-# --------------------------------------------------
+# ============================================================
 
 RAG_PROMPT = ChatPromptTemplate.from_template(
-"""
+    """
 You are an AI HR Assistant for Zyro Dynamics.
 
 Your task is to answer the user's question using the information
@@ -184,12 +207,24 @@ Question:
 )
 
 
-# --------------------------------------------------
-# SCOPE PROMPT
-# --------------------------------------------------
+# ============================================================
+# FORMAT DOCUMENTS
+# ============================================================
+
+def format_docs(docs):
+
+    return "\n\n".join(
+        doc.page_content
+        for doc in docs
+    )
+
+
+# ============================================================
+# SCOPE / GUARDRAIL PROMPT
+# ============================================================
 
 SCOPE_PROMPT = ChatPromptTemplate.from_template(
-"""
+    """
 You are a scope classifier for the Zyro Dynamics HR Assistant.
 
 Decide whether the user's question is related to internal company HR topics,
@@ -211,6 +246,10 @@ Question:
 )
 
 
+# ============================================================
+# REFUSAL MESSAGE
+# ============================================================
+
 REFUSAL_MESSAGE = (
     "I am the Zyro Dynamics HR Assistant and can only help with "
     "questions related to company HR policies and employee information. "
@@ -218,13 +257,16 @@ REFUSAL_MESSAGE = (
 )
 
 
-# --------------------------------------------------
-# ASK BOT
-# --------------------------------------------------
+# ============================================================
+# ASK BOT FUNCTION
+# ============================================================
 
-def ask_bot(question):
+def ask_bot(question: str):
 
-    # Scope check
+    # ----------------------------
+    # Step 1: Scope classification
+    # ----------------------------
+
     guardrail_chain = (
         SCOPE_PROMPT
         | llm_model
@@ -235,6 +277,11 @@ def ask_bot(question):
         {"question": question}
     ).strip().upper()
 
+
+    # ----------------------------
+    # Step 2: Reject unrelated questions
+    # ----------------------------
+
     if "OUT_OF_SCOPE" in verdict:
 
         return {
@@ -243,23 +290,26 @@ def ask_bot(question):
         }
 
 
-    # Retrieve documents
+    # ----------------------------
+    # Step 3: Retrieve documents
+    # ----------------------------
+
     docs = retriever.invoke(question)
 
-    context = "\n\n".join(
-        doc.page_content
-        for doc in docs
-    )
+    context = format_docs(docs)
 
 
-    # Generate answer
-    chain = (
+    # ----------------------------
+    # Step 4: Generate RAG answer
+    # ----------------------------
+
+    answer_chain = (
         RAG_PROMPT
         | llm_model
         | StrOutputParser()
     )
 
-    response = chain.invoke(
+    response = answer_chain.invoke(
         {
             "context": context,
             "question": question
@@ -267,15 +317,47 @@ def ask_bot(question):
     )
 
 
+    # ----------------------------
+    # Step 5: Return answer + sources
+    # ----------------------------
+
     return {
         "answer": response,
         "sources": docs
     }
 
 
-# --------------------------------------------------
-# USER INTERFACE
-# --------------------------------------------------
+# ============================================================
+# SIDEBAR INFORMATION
+# ============================================================
+
+with st.sidebar:
+
+    st.header("📚 Knowledge Base")
+
+    st.write(
+        f"Documents loaded: **{len(documents)}**"
+    )
+
+    st.write(
+        f"Text chunks: **{len(chunks)}**"
+    )
+
+    st.write(
+        f"LLM: **{LLM_MODEL}**"
+    )
+
+    st.divider()
+
+    st.write(
+        "This assistant answers questions using "
+        "the Zyro Dynamics HR document corpus."
+    )
+
+
+# ============================================================
+# USER INPUT
+# ============================================================
 
 question = st.text_input(
     "Ask your HR question:",
@@ -283,7 +365,11 @@ question = st.text_input(
 )
 
 
-if st.button("Ask", type="primary"):
+# ============================================================
+# ASK BUTTON
+# ============================================================
+
+if st.button("Ask HR Assistant", type="primary"):
 
     if not question.strip():
 
@@ -293,29 +379,72 @@ if st.button("Ask", type="primary"):
 
         with st.spinner("Thinking..."):
 
-            result = ask_bot(question)
+            try:
 
+                result = ask_bot(question)
 
-        st.subheader("Answer")
+                # ----------------------------
+                # Display answer
+                # ----------------------------
 
-        st.write(result["answer"])
+                st.subheader("💬 Answer")
 
-
-        if result["sources"]:
-
-            st.subheader("Sources")
-
-            shown_sources = set()
-
-            for doc in result["sources"]:
-
-                source = doc.metadata.get(
-                    "source",
-                    "Unknown"
+                st.markdown(
+                    result["answer"]
                 )
 
-                if source not in shown_sources:
 
-                    st.write(f"📄 {source}")
+                # ----------------------------
+                # Display sources
+                # ----------------------------
 
-                    shown_sources.add(source)
+                if result["sources"]:
+
+                    st.subheader("📄 Sources")
+
+                    displayed_sources = set()
+
+                    for doc in result["sources"]:
+
+                        source = doc.metadata.get(
+                            "source",
+                            "Unknown source"
+                        )
+
+                        if source not in displayed_sources:
+
+                            displayed_sources.add(source)
+
+                            st.write(
+                                f"• {source}"
+                            )
+
+            except Exception as e:
+
+                st.error(
+                    "An error occurred while contacting the "
+                    "Groq API or processing your question."
+                )
+
+                st.warning(
+                    "Please check Streamlit → Manage app → Logs "
+                    "for the detailed error."
+                )
+
+                # Show the error type without exposing secrets
+                st.caption(
+                    f"Error type: {type(e).__name__}"
+                )
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "Zyro Dynamics HR Assistant • "
+    "Powered by LangChain + FAISS + HuggingFace Embeddings + Groq"
+)
+```
