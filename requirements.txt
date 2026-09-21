@@ -10,7 +10,4 @@ pypdf
 sentence-transformers
 transformers
 torch
-huggingface-hub
-groq
-python-dotenv
-tiktoken
+torchvision
