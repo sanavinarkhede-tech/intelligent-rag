@@ -447,4 +447,3 @@ st.caption(
     "Zyro Dynamics HR Assistant • "
     "Powered by LangChain + FAISS + HuggingFace Embeddings + Groq"
 )
-```
